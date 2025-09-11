@@ -1,15 +1,13 @@
 package main
 
 import (
-	"flag"
 	"fmt"
 	"homeapp/pkg/crawler"
 	"homeapp/pkg/crawler/spider"
 	"homeapp/pkg/index"
+	"homeapp/pkg/netsrv"
 	"homeapp/pkg/saver"
 	"log"
-	"net/http"
-	_ "net/http/pprof"
 	"strings"
 )
 
@@ -19,77 +17,69 @@ var urls = [2]string{
 }
 
 func main() {
-	go run()
-	http.ListenAndServe(":8080", nil)
+	netsrv.StartServer("8080", search)
 }
 
-func run() {
-	sFlag := flag.String("s", "", "строковое значение для обрабработки")
+func search(word string) []string {
+	saverService := saver.Saver{
+		FilePath: fmt.Sprintf("%s.json", word),
+	}
+	cache := saverService.Read()
+	lsWord := strings.ToLower(word)
 
-	flag.Parse()
+	result := []string{}
 
-	fmt.Println(*sFlag)
+	var iIndex index.InvertedIndex
+	var docIds []int
+	var allDocs []crawler.Document
+	var shouldSave bool
 
-	if *sFlag != "" {
+	for _, url := range urls {
+		savedData, ok := cache[url]
+		if ok {
+			iIndex = savedData.InvertedIdx
+			allDocs = savedData.Docs
+		} else {
+			var err error
+			spiderService := spider.New()
+			allDocs, err = spiderService.Scan(url, 2)
 
-		saverService := saver.Saver{
-			FilePath: fmt.Sprintf("%s.json", *sFlag),
+			if err != nil {
+				log.Fatal(err)
+				return result
+			}
+
+			iIndex = index.BuildInvertedIndex(allDocs)
+			shouldSave = true
 		}
-		cache := saverService.Read()
-		lsFlag := strings.ToLower(*sFlag)
 
-		var iIndex index.InvertedIndex
-		var docIds []int
-		var allDocs []crawler.Document
-		var shouldSave bool
+		docIds = iIndex[lsWord]
+		docs := make([]crawler.Document, 0)
+		for _, id := range docIds {
+			doc := index.FindDocument(allDocs, id)
 
-		for _, url := range urls {
-			savedData, ok := cache[url]
-			if ok {
-				iIndex = savedData.InvertedIdx
-				allDocs = savedData.Docs
-			} else {
-				var err error
-				spiderService := spider.New()
-				allDocs, err = spiderService.Scan(url, 2)
-
-				if err != nil {
-					log.Fatal(err)
-					return
-				}
-
-				iIndex = index.BuildInvertedIndex(allDocs)
-				shouldSave = true
-			}
-
-			docIds = iIndex[lsFlag]
-			docs := make([]crawler.Document, 0)
-			for _, id := range docIds {
-				doc := index.FindDocument(allDocs, id)
-
-				if doc.ID != 0 {
-					docs = append(docs, *doc)
-				}
-			}
-
-			for _, doc := range docs {
-				fmt.Println(doc.URL, doc.Title)
-			}
-
-			if shouldSave {
-				cache[url] = saver.SavedData{
-					Url:         url,
-					InvertedIdx: iIndex,
-					Docs:        docs,
-				}
+			if doc.ID != 0 {
+				docs = append(docs, *doc)
 			}
 		}
+
+		for _, doc := range docs {
+			fmt.Println(doc.URL, doc.Title)
+
+			result = append(result, fmt.Sprintf("%s %s", doc.URL, doc.Title))
+		}
+
 		if shouldSave {
-			saverService.Save(cache)
+			cache[url] = saver.SavedData{
+				Url:         url,
+				InvertedIdx: iIndex,
+				Docs:        docs,
+			}
 		}
-	} else {
-		log.Fatal("Ошибка: нужно указать значение флаг -s")
+	}
+	if shouldSave {
+		saverService.Save(cache)
 	}
 
-	http.ListenAndServe(":8080", nil)
+	return result
 }
