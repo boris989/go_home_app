@@ -7,6 +7,8 @@ import (
 	"homeapp/pkg/index"
 	"homeapp/pkg/netsrv"
 	"homeapp/pkg/saver"
+	"homeapp/pkg/store"
+	"homeapp/pkg/webapp"
 	"log"
 	"strings"
 )
@@ -15,9 +17,11 @@ var urls = [2]string{
 	"https://go.dev",
 	"https://golang.org",
 }
+var storeInstance = store.New()
 
 func main() {
-	netsrv.StartServer("8080", search)
+	go netsrv.StartServer("8080", search)
+	webapp.StartHTTPServer("8081", storeInstance)
 }
 
 func search(word string) []string {
@@ -57,7 +61,6 @@ func search(word string) []string {
 		docs := make([]crawler.Document, 0)
 		for _, id := range docIds {
 			doc := index.FindDocument(allDocs, id)
-
 			if doc.ID != 0 {
 				docs = append(docs, *doc)
 			}
@@ -68,6 +71,9 @@ func search(word string) []string {
 
 			result = append(result, fmt.Sprintf("%s %s", doc.URL, doc.Title))
 		}
+
+		storeInstance.Docs = docs
+		storeInstance.Index = iIndex
 
 		if shouldSave {
 			cache[url] = saver.SavedData{
